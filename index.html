@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Essai vocal local — Sacha</title>
+<style>body{font:17px/1.5 system-ui;margin:24px auto;padding:0 18px;max-width:580px;color:#292632;background:#eeedf1}h1{font-size:26px}button,input,textarea{box-sizing:border-box;font:inherit;padding:12px;width:100%;margin:7px 0;border:1px solid #aaa;border-radius:8px}button{background:#62506d;color:white;min-height:48px}button:disabled{opacity:.5}input,textarea{background:white}p{margin:14px 0}.small{font-size:14px}#status{font-weight:600}audio{width:100%}textarea{height:190px;font-size:13px}label{display:block}button:focus-visible,input:focus-visible{outline:3px solid #834453}</style></head>
+<body><h1>Essai vocal local de Sacha</h1><p>Un test sur ton téléphone, sans serveur personnel. Garde cette page au premier plan.</p>
+<button id="mic">1. Tester le micro — gratuit</button>
+<label for="key">Clé API OpenAI dédiée au test</label><input id="key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="À saisir ici uniquement">
+<p class="small">La clé n’est ni enregistrée ni incluse dans le bilan. Elle est envoyée uniquement à OpenAI. Cet essai direct depuis un fichier local est expérimental ; le navigateur peut le bloquer.</p>
+<button id="start">2. Essayer la voix — crédit API utilisé</button><button id="stop" disabled>Arrêter et fermer le micro</button>
+<p id="status" role="status" aria-live="polite">Prêt. Commence par le test gratuit.</p>
+<audio id="audio" autoplay controls></audio>
+<p class="small">Sacha a une voix générée. Dis « Bonjour, réponds en une phrase », puis essaie de l’interrompre. La connexion se ferme après 30 secondes au maximum dans cette page. Ce délai local n’est pas une garantie de plafond de facturation.</p>
+<label for="report">Bilan technique à me transmettre, sans clé ni paroles</label><textarea id="report" readonly></textarea><button id="copy">Copier le bilan</button>
+<p class="small">Si l’ouverture ou le micro est bloqué, n’entre pas de clé : transmets simplement le bilan. Ne désactive pas les protections du navigateur.</p>
+<script>
+'use strict';
+const el=id=>document.getElementById(id);
+let stream=null,pc=null,channel=null,controller=null,timer=null,watchdog=null,active=false,run=0,remaining=0;
+const lines=['Essai local Sacha v1', 'Ouverture : '+location.protocol, 'Contexte sécurisé : '+(window.isSecureContext?'oui':'non'), 'Micro disponible : '+(!!navigator.mediaDevices?.getUserMedia), 'WebRTC disponible : '+(typeof RTCPeerConnection!=='undefined')];
+function log(text){lines.push(text);el('report').value=lines.join('\n');}
+function status(text){el('status').textContent=text;}
+function buttons(busy){el('mic').disabled=busy;el('start').disabled=busy;el('key').disabled=busy;el('stop').disabled=!busy;}
+function stop(message='Test arrêté. Micro fermé.'){
+  run++;active=false;clearInterval(timer);clearTimeout(watchdog);controller?.abort();controller=null;
+  stream?.getTracks().forEach(t=>t.stop());stream=null;
+  if(channel?.readyState==='open'){try{channel.send(JSON.stringify({type:'response.cancel'}));}catch{}}
+  channel?.close();channel=null;const old=pc;pc=null;old?.close();el('audio').pause();el('audio').srcObject=null;el('key').value='';buttons(false);status(message);
+}
+function microphoneError(e){return e.name==='NotAllowedError'?'Micro refusé par le navigateur ou Android.':e.name==='NotFoundError'?'Aucun micro trouvé.':e.name==='NotReadableError'?'Micro indisponible ou déjà utilisé.':'Micro inaccessible dans ce mode d’ouverture.';}
+async function microphone(){if(!navigator.mediaDevices?.getUserMedia)throw new Error('Micro inaccessible');return navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true},video:false});}
+el('mic').onclick=async()=>{if(active)return;active=true;buttons(true);const id=++run;status('Autorise le micro si le téléphone le demande.');try{const s=await microphone();if(id!==run){s.getTracks().forEach(t=>t.stop());return;}stream=s;log('Micro : autorisation obtenue, piste '+s.getAudioTracks()[0]?.readyState);status('Micro ouvert. Fermeture dans 3 secondes. Aucun envoi réseau.');watchdog=setTimeout(()=>stop('Micro accessible et maintenant fermé. Tu peux essayer la voix.'),3000);}catch(e){if(id!==run)return;log('Micro : '+microphoneError(e));stop(microphoneError(e));}};
+el('start').onclick=async()=>{
+  if(active)return;
+  let key=el('key').value.trim();if(!key){status('Saisis ta clé API uniquement dans le champ ci-dessus.');return;}
+  if(!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection==='undefined'){status('Micro ou WebRTC indisponible. Transmets le bilan sans saisir de clé.');el('key').value='';return;}
+  active=true;buttons(true);el('key').value='';const id=++run;let stage='micro';status('Ouverture du micro…');
+  try{
+    const s=await microphone();if(id!==run){s.getTracks().forEach(t=>t.stop());return;}stream=s;stream.getAudioTracks().forEach(t=>t.enabled=false);log('Micro : prêt, coupé pendant la connexion');
+    pc=new RTCPeerConnection();const peer=pc;peer.ontrack=e=>{if(id!==run)return;el('audio').srcObject=e.streams[0]||new MediaStream([e.track]);el('audio').play().catch(()=>status('Touche le bouton lecture du lecteur audio pour entendre Sacha.'));log('Audio distant : piste reçue (à confirmer à l’écoute)');};
+    peer.onconnectionstatechange=()=>{if(id!==run)return;log('Connexion : '+peer.connectionState);if(['failed','disconnected'].includes(peer.connectionState))stop('Connexion interrompue. Micro fermé.');};
+    for(const track of stream.getTracks())peer.addTrack(track,stream);
+    channel=peer.createDataChannel('oai-events');let spoken=false,answered=false;
+    channel.onopen=()=>{if(id!==run)return;log('Canal vocal : ouvert');status('Parle maintenant. Sacha peut répondre et être interrompue.');channel.send(JSON.stringify({type:'response.create'}));};
+    channel.onmessage=event=>{if(id!==run)return;try{const data=JSON.parse(event.data);if(data.type==='input_audio_buffer.speech_started'&&!spoken){spoken=true;log('Parole entrante : détectée');}if(data.type==='response.done'&&!answered){answered=true;log('Réponse Sacha : '+(data.response?.status==='completed'?'terminée':'interrompue ou incomplète'));}if(data.type==='error'){log('API : erreur pendant la conversation (détails volontairement exclus)');stop('Erreur de conversation. Copie le bilan.');}}catch{log('Événement illisible');}};
+    stage='offre vocale';const offer=await peer.createOffer();await peer.setLocalDescription(offer);if(id!==run)return;
+    const config={type:'realtime',model:'gpt-realtime-1.5',instructions:'Tu es Sacha, une agente numérique. Ce test technique dure trente secondes. Parle français. Commence par « Bonjour, je suis Sacha. Est-ce que tu m’entends ? ». Réponds ensuite en une phrase courte. N’invente aucun fait sur la personne. Accepte les interruptions.',max_output_tokens:150,output_modalities:['audio'],audio:{input:{turn_detection:{type:'semantic_vad',eagerness:'medium',create_response:true,interrupt_response:true}},output:{voice:'marin'}},tools:[]};
+    const form=new FormData();form.set('sdp',offer.sdp);form.set('session',JSON.stringify(config));
+    stage='accès OpenAI';status('Connexion directe à OpenAI…');controller=new AbortController();watchdog=setTimeout(()=>{log('Connexion : délai dépassé');stop('Connexion trop longue. Micro fermé. Copie le bilan.');},20000);
+    const pending=fetch('https://api.openai.com/v1/realtime/calls',{method:'POST',headers:{Authorization:'Bearer '+key},body:form,signal:controller.signal});key='';
+    const response=await pending;if(id!==run)return;
+    log('Accès OpenAI : HTTP '+response.status);
+    if(!response.ok){const hints={401:'Clé refusée.',403:'Accès API ou modèle non autorisé.',429:'Crédit API ou limite de requêtes à vérifier.',400:'Configuration de session refusée.'};throw new Error(hints[response.status]||'OpenAI a refusé la connexion.');}
+    stage='connexion vocale';const answer=await response.text();if(id!==run)return;await peer.setRemoteDescription({type:'answer',sdp:answer});if(id!==run)return;
+    clearTimeout(watchdog);stream.getAudioTracks().forEach(t=>t.enabled=true);log('Session : réponse reçue, micro activé, limite locale 30 secondes');remaining=30;const deadline=Date.now()+30000;
+    timer=setInterval(()=>{remaining=Math.max(0,Math.ceil((deadline-Date.now())/1000));el('stop').textContent='Arrêter — '+remaining+' s restantes';if(!remaining){log('Arrêt automatique : 30 secondes');stop('Test terminé. Micro fermé. As-tu entendu Sacha et pu lui répondre ?');}},250);
+  }catch(e){if(id!==run)return;let reason=stage==='micro'?microphoneError(e):e instanceof TypeError?'Échec réseau ou restriction du navigateur (CORS possible ; cause non déterminée).':e.message;log('Blocage — '+stage+' : '+reason);stop(reason+' Copie le bilan.');}finally{key='';}
+};
+el('stop').onclick=()=>{log('Arrêt manuel');stop();};
+el('copy').onclick=async()=>{try{await navigator.clipboard.writeText(el('report').value);status('Bilan copié, sans clé ni paroles.');}catch{el('report').focus();el('report').select();status('Sélectionne et copie le bilan ci-dessus.');}};
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&active){log('Arrêt : page passée en arrière-plan');stop();}});
+window.addEventListener('pagehide',()=>stop());
+log('Aucun appel API effectué à l’ouverture.');
+</script></body></html>
